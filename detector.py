@@ -1,13 +1,15 @@
 """
 Wildlife Detection Engine
-Uses YOLOv8 to detect animals in images and video frames.
+Uses YOLOv8 to detect animals in images and video frames,
+including fine-tuned custom monkey detection.
 """
+import os
 import cv2
 import numpy as np
 from datetime import datetime, timedelta
 from ultralytics import YOLO
 from config import (
-    YOLO_MODEL, CONFIDENCE_THRESHOLD, WILDLIFE_CLASSES,
+    BASE_DIR, YOLO_MODEL, CONFIDENCE_THRESHOLD, WILDLIFE_CLASSES,
     THREAT_LEVELS, THREAT_COLORS, ALERT_COOLDOWN_SECONDS, DEFAULT_ZONE
 )
 
@@ -16,8 +18,20 @@ class WildlifeDetector:
     """Core detection engine for wildlife intrusion detection."""
 
     def __init__(self):
-        print("[INFO] Loading YOLO model...")
+        print("[INFO] Loading base YOLO model (COCO wildlife)...")
         self.model = YOLO(YOLO_MODEL)
+        
+        # Load custom fine-tuned monkey model if available
+        self.monkey_model = None
+        custom_weights = os.path.join(BASE_DIR, 'yolov8_monkey.pt')
+        if os.path.exists(custom_weights):
+            try:
+                print(f"[INFO] Loading custom fine-tuned model: {custom_weights}")
+                self.monkey_model = YOLO(custom_weights)
+                print("[INFO] Custom Monkey detector loaded successfully!")
+            except Exception as e:
+                print(f"[WARN] Could not load custom monkey model: {e}")
+
         self.detection_log = []
         self.alert_history = {}  # Track last alert time per animal type
         self.total_detections = 0
@@ -29,7 +43,7 @@ class WildlifeDetector:
             'threat_counts': {'low': 0, 'medium': 0, 'critical': 0},
             'session_start': datetime.now().isoformat(),
         }
-        print("[INFO] YOLO model loaded successfully!")
+        print("[INFO] Wildlife detection pipeline ready!")
 
     def set_detection_zone(self, zone):
         """Update the detection zone boundaries."""
@@ -62,9 +76,72 @@ class WildlifeDetector:
     def detect(self, frame):
         """
         Run wildlife detection on a single frame.
-        Returns: annotated_frame, list of detections, list of alerts
+        Runs base YOLO and custom monkey model, merging detections.
         """
-        results = self.model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+        raw_candidates = []
+
+        # 1. Base YOLO Inference
+        base_results = self.model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+        for result in base_results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                if cls_id in WILDLIFE_CLASSES:
+                    animal_name = WILDLIFE_CLASSES[cls_id]
+                    conf = float(box.conf[0])
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    raw_candidates.append({
+                        'animal': animal_name,
+                        'confidence': conf,
+                        'bbox': [x1, y1, x2, y2],
+                        'is_custom': False
+                    })
+
+        # 2. Custom Monkey Inference
+        if self.monkey_model is not None:
+            monkey_results = self.monkey_model(frame, conf=0.35, verbose=False)
+            for result in monkey_results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                for box in boxes:
+                    conf = float(box.conf[0])
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    raw_candidates.append({
+                        'animal': 'Monkey',
+                        'confidence': conf,
+                        'bbox': [x1, y1, x2, y2],
+                        'is_custom': True
+                    })
+
+        # 3. Non-Maximum Suppression / De-duplication (Monkey overrides false Bear/Cat on same box)
+        filtered_candidates = []
+        for cand in raw_candidates:
+            if cand['animal'] in ('Bear', 'Cat', 'Bird'):
+                # Check if overlapping with a detected Monkey
+                overlap = False
+                for m_cand in raw_candidates:
+                    if m_cand['animal'] == 'Monkey':
+                        # Compute simple IoU
+                        bx1, by1, bx2, by2 = cand['bbox']
+                        mx1, my1, mx2, my2 = m_cand['bbox']
+                        ix1 = max(bx1, mx1)
+                        iy1 = max(by1, my1)
+                        ix2 = min(bx2, mx2)
+                        iy2 = min(by2, my2)
+                        if ix2 > ix1 and iy2 > iy1:
+                            inter_area = (ix2 - ix1) * (iy2 - iy1)
+                            b_area = (bx2 - bx1) * (by2 - by1)
+                            if b_area > 0 and (inter_area / b_area) > 0.4:
+                                overlap = True
+                                break
+                if not overlap:
+                    filtered_candidates.append(cand)
+            else:
+                filtered_candidates.append(cand)
+
         detections = []
         alerts = []
         h, w = frame.shape[:2]
@@ -80,71 +157,61 @@ class WildlifeDetector:
         cv2.putText(annotated, f"Zone: {zone.get('name', 'Detection Zone')}",
                     (zx1 + 5, zy1 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-        for result in results:
-            boxes = result.boxes
-            if boxes is None:
-                continue
-            for box in boxes:
-                cls_id = int(box.cls[0])
+        for item in filtered_candidates:
+            animal_name = item['animal']
+            confidence = item['confidence']
+            x1, y1, x2, y2 = item['bbox']
+            threat = THREAT_LEVELS.get(animal_name, 'medium')
 
-                # Only process wildlife classes
-                if cls_id not in WILDLIFE_CLASSES:
-                    continue
+            # Check if in detection zone
+            in_zone = self.is_in_zone((x1, y1, x2, y2), w, h)
 
-                animal_name = WILDLIFE_CLASSES[cls_id]
-                confidence = float(box.conf[0])
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                threat = THREAT_LEVELS.get(animal_name, 'medium')
+            detection = {
+                'animal': animal_name,
+                'confidence': round(confidence * 100, 1),
+                'bbox': [x1, y1, x2, y2],
+                'threat': threat,
+                'in_zone': in_zone,
+                'timestamp': datetime.now().isoformat(),
+            }
+            detections.append(detection)
+            self.total_detections += 1
 
-                # Check if in detection zone
-                in_zone = self.is_in_zone((x1, y1, x2, y2), w, h)
+            # Update stats
+            self.stats['total_detections'] += 1
+            self.stats['animals_detected'][animal_name] = \
+                self.stats['animals_detected'].get(animal_name, 0) + 1
+            self.stats['threat_counts'][threat] += 1
 
-                detection = {
+            # Draw bounding box
+            color_bgr = THREAT_COLORS.get(threat, (255, 255, 255))
+            thickness = 3 if threat == 'critical' else 2
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, thickness)
+
+            # Draw label background
+            label = f"{animal_name} {confidence*100:.0f}% [{threat.upper()}]"
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(annotated, (x1, y1 - lh - 10), (x1 + lw + 10, y1), color_bgr, -1)
+            cv2.putText(annotated, label, (x1 + 5, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # Generate alert if in zone
+            if in_zone and self.should_trigger_alert(animal_name):
+                alert = {
+                    'type': 'intrusion',
                     'animal': animal_name,
-                    'confidence': round(confidence * 100, 1),
-                    'bbox': [x1, y1, x2, y2],
                     'threat': threat,
-                    'in_zone': in_zone,
+                    'confidence': round(confidence * 100, 1),
+                    'message': f"⚠️ {threat.upper()} ALERT: {animal_name} detected in {zone.get('name', 'zone')}!",
                     'timestamp': datetime.now().isoformat(),
                 }
-                detections.append(detection)
-                self.total_detections += 1
+                alerts.append(alert)
+                self.stats['alerts_triggered'] += 1
 
-                # Update stats
-                self.stats['total_detections'] += 1
-                self.stats['animals_detected'][animal_name] = \
-                    self.stats['animals_detected'].get(animal_name, 0) + 1
-                self.stats['threat_counts'][threat] += 1
-
-                # Draw bounding box
-                color_bgr = THREAT_COLORS.get(threat, (255, 255, 255))
-                thickness = 3 if threat == 'critical' else 2
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, thickness)
-
-                # Draw label background
-                label = f"{animal_name} {confidence*100:.0f}% [{threat.upper()}]"
-                (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(annotated, (x1, y1 - lh - 10), (x1 + lw + 10, y1), color_bgr, -1)
-                cv2.putText(annotated, label, (x1 + 5, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                # Generate alert if in zone
-                if in_zone and self.should_trigger_alert(animal_name):
-                    alert = {
-                        'type': 'intrusion',
-                        'animal': animal_name,
-                        'threat': threat,
-                        'confidence': round(confidence * 100, 1),
-                        'message': f"⚠️ {threat.upper()} ALERT: {animal_name} detected in {zone.get('name', 'zone')}!",
-                        'timestamp': datetime.now().isoformat(),
-                    }
-                    alerts.append(alert)
-                    self.stats['alerts_triggered'] += 1
-
-                    # Add to detection log
-                    self.detection_log.append(alert)
-                    if len(self.detection_log) > 500:
-                        self.detection_log = self.detection_log[-500:]
+                # Add to detection log
+                self.detection_log.append(alert)
+                if len(self.detection_log) > 500:
+                    self.detection_log = self.detection_log[-500:]
 
         # Draw status overlay
         status_text = f"Detections: {len(detections)} | Total: {self.total_detections}"

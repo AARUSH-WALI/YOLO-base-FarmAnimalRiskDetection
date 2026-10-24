@@ -1,0 +1,6 @@
+path: E:/Sites/ProjectBuilderPro/YOLO/datasets/monkey
+train: images/train
+val: images/val
+
+nc: 1
+names: ['Monkey']
