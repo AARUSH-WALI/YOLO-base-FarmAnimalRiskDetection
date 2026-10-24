@@ -80,11 +80,9 @@ class WildlifeDetector:
         """
         raw_candidates = []
 
-        # 1. Base YOLO Inference (including Person=0 and Dog=16 for disambiguation)
+        # 1. Base YOLO Inference (track all livestock, pets, and humans)
         base_results = self.model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
-        detected_persons = []
-        detected_dogs = []
-        detected_sheeps = []
+        suppression_boxes = []  # Any verified human, dog, cow, sheep, horse box
 
         for result in base_results:
             boxes = result.boxes
@@ -95,17 +93,16 @@ class WildlifeDetector:
                 conf = float(box.conf[0])
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                # Check for humans (COCO class 0: person) to prevent false monkey detections
+                # Check for humans (COCO class 0: person)
                 if cls_id == 0:
-                    detected_persons.append([x1, y1, x2, y2])
+                    suppression_boxes.append(('Person', [x1, y1, x2, y2]))
                     continue
 
                 if cls_id in WILDLIFE_CLASSES:
                     animal_name = WILDLIFE_CLASSES[cls_id]
-                    if animal_name == 'Dog':
-                        detected_dogs.append([x1, y1, x2, y2])
-                    elif animal_name == 'Sheep':
-                        detected_sheeps.append([x1, y1, x2, y2])
+                    # All standard farm animals suppress false monkey detections
+                    if animal_name in ('Cow', 'Sheep', 'Dog', 'Horse', 'Elephant', 'Zebra', 'Giraffe'):
+                        suppression_boxes.append((animal_name, [x1, y1, x2, y2]))
 
                     raw_candidates.append({
                         'animal': animal_name,
@@ -114,8 +111,8 @@ class WildlifeDetector:
                         'is_custom': False
                     })
 
-        # Helper IoU function
-        def compute_iou(boxA, boxB):
+        # Helper IoU and intersection fraction function
+        def compute_overlap_ratio(boxA, boxB):
             ax1, ay1, ax2, ay2 = boxA
             bx1, by1, bx2, by2 = boxB
             ix1, iy1 = max(ax1, bx1), max(ay1, by1)
@@ -128,9 +125,9 @@ class WildlifeDetector:
             min_area = min(areaA, areaB)
             return inter_area / min_area if min_area > 0 else 0.0
 
-        # 2. Custom Monkey Inference (Strict Confidence: >= 0.55)
+        # 2. Custom Monkey Inference (Strict Confidence: >= 0.70)
         if self.monkey_model is not None:
-            monkey_results = self.monkey_model(frame, conf=0.55, verbose=False)
+            monkey_results = self.monkey_model(frame, conf=0.70, verbose=False)
             for result in monkey_results:
                 boxes = result.boxes
                 if boxes is None:
@@ -139,20 +136,23 @@ class WildlifeDetector:
                     conf = float(box.conf[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     m_box = [x1, y1, x2, y2]
+                    bw = x2 - x1
+                    bh = y2 - y1
 
-                    # Filter A: If box overlaps heavily with a recognized HUMAN, it is NOT a monkey!
-                    is_human = any(compute_iou(m_box, p_box) > 0.35 for p_box in detected_persons)
-                    if is_human:
+                    # Filter 1: Ceiling Fan / Sky Rejector
+                    # If box is located in the top 30% of the frame without any lower body, it's typically ceiling/fan
+                    if y2 < (h * 0.32) and bh < (h * 0.35):
                         continue
 
-                    # Filter B: If box overlaps with a recognized DOG, preserve DOG (don't mislabel as monkey)
-                    is_dog = any(compute_iou(m_box, d_box) > 0.40 for d_box in detected_dogs)
-                    if is_dog:
-                        continue
+                    # Filter 2: If box overlaps with ANY confirmed Human, Cow, Sheep, Dog, or Horse -> REJECT
+                    has_conflict = False
+                    for sup_label, sup_box in suppression_boxes:
+                        overlap = compute_overlap_ratio(m_box, sup_box)
+                        if overlap > 0.25:  # Overlaps significantly with verified animal or person
+                            has_conflict = True
+                            break
 
-                    # Filter C: If box overlaps heavily with a recognized SHEEP, preserve SHEEP
-                    is_sheep = any(compute_iou(m_box, s_box) > 0.50 for s_box in detected_sheeps)
-                    if is_sheep:
+                    if has_conflict:
                         continue
 
                     raw_candidates.append({
