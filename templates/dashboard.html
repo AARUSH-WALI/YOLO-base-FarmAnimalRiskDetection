@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Wildlife Intrusion Alert System - AI-powered real-time wildlife detection for farm and residential boundary protection using YOLOv8.">
+    <title>WildGuard AI — Wildlife Intrusion Alert System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav" id="topNav">
+        <div class="nav-brand">
+            <div class="brand-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                    <circle cx="9" cy="9" r="1.5" fill="currentColor"/>
+                    <circle cx="15" cy="9" r="1.5" fill="currentColor"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="brand-name">WildGuard <span class="accent">AI</span></h1>
+                <p class="brand-tagline">Wildlife Intrusion Alert System</p>
+            </div>
+        </div>
+        <div class="nav-status">
+            <div class="status-badge" id="connectionStatus">
+                <span class="status-dot offline"></span>
+                <span>Disconnected</span>
+            </div>
+            <div class="status-badge" id="cameraStatus">
+                <span class="status-dot offline"></span>
+                <span>Camera Off</span>
+            </div>
+            <div class="nav-time" id="navTime">--:--:--</div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Left Panel: Video Feed -->
+        <section class="panel video-panel" id="videoPanel">
+            <div class="panel-header">
+                <h2 class="panel-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="panel-icon">
+                        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                    </svg>
+                    Live Detection Feed
+                </h2>
+                <div class="panel-actions">
+                    <button class="btn btn-primary" id="btnWebcam" onclick="startWebcam()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+                        </svg>
+                        Start Webcam
+                    </button>
+                    <button class="btn btn-danger hidden" id="btnStop" onclick="stopCamera()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        </svg>
+                        Stop
+                    </button>
+                </div>
+            </div>
+            <div class="video-container" id="videoContainer">
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <div class="placeholder-content">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="placeholder-icon">
+                            <path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <h3>No Active Feed</h3>
+                        <p>Start webcam or upload an image/video to begin detection</p>
+                        <label class="btn btn-outline upload-btn" for="fileUpload">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                            Upload Image / Video
+                        </label>
+                        <input type="file" id="fileUpload" accept="image/*,video/*" class="hidden" onchange="handleFileUpload(event)">
+                    </div>
+                </div>
+                <img id="videoFrame" class="video-frame hidden" alt="Detection Feed">
+                <div class="video-overlay hidden" id="videoOverlay">
+                    <div class="detection-counter" id="liveDetectionCount">0 detections</div>
+                </div>
+            </div>
+
+            <!-- Detection Results for Image Mode -->
+            <div class="detection-results hidden" id="detectionResults">
+                <h3>Detection Results</h3>
+                <div class="detection-cards" id="detectionCards"></div>
+            </div>
+        </section>
+
+        <!-- Right Panel: Dashboard -->
+        <aside class="panel dashboard-panel">
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-card" id="statTotal">
+                    <div class="stat-icon stat-icon-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalDetections">0</span>
+                        <span class="stat-label">Total Detections</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statAlerts">
+                    <div class="stat-icon stat-icon-red">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                            <path d="M13.73 21a2 2 0 01-3.46 0"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalAlerts">0</span>
+                        <span class="stat-label">Alerts Triggered</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statCritical">
+                    <div class="stat-icon stat-icon-orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="criticalCount">0</span>
+                        <span class="stat-label">Critical Threats</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statSpecies">
+                    <div class="stat-icon stat-icon-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                            <polyline points="22,6 12,13 2,6"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="speciesCount">0</span>
+                        <span class="stat-label">Species Detected</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Threat Level Bars -->
+            <div class="panel-section">
+                <h3 class="section-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    </svg>
+                    Threat Levels
+                </h3>
+                <div class="threat-bars">
+                    <div class="threat-bar-row">
+                        <span class="threat-label">
+                            <span class="threat-dot threat-low"></span> Low
+                        </span>
+                        <div class="threat-bar">
+                            <div class="threat-fill threat-fill-low" id="threatLow" style="width: 0%"></div>
+                        </div>
+                        <span class="threat-count" id="threatLowCount">0</span>
+                    </div>
+                    <div class="threat-bar-row">
+                        <span class="threat-label">
+                            <span class="threat-dot threat-medium"></span> Medium
+                        </span>
+                        <div class="threat-bar">
+                            <div class="threat-fill threat-fill-medium" id="threatMedium" style="width: 0%"></div>
+                        </div>
+                        <span class="threat-count" id="threatMediumCount">0</span>
+                    </div>
+                    <div class="threat-bar-row">
+                        <span class="threat-label">
+                            <span class="threat-dot threat-critical"></span> Critical
+                        </span>
+                        <div class="threat-bar">
+                            <div class="threat-fill threat-fill-critical" id="threatCritical" style="width: 0%"></div>
+                        </div>
+                        <span class="threat-count" id="threatCriticalCount">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Species Breakdown -->
+            <div class="panel-section">
+                <h3 class="section-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
+                        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+                    </svg>
+                    Species Breakdown
+                </h3>
+                <div class="species-list" id="speciesList">
+                    <div class="empty-state-small">No species detected yet</div>
+                </div>
+            </div>
+
+            <!-- Alert Log -->
+            <div class="panel-section alert-log-section">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        </svg>
+                        Alert Log
+                    </h3>
+                    <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Clear</button>
+                </div>
+                <div class="alert-log" id="alertLog">
+                    <div class="empty-state-small">No alerts yet — waiting for detections</div>
+                </div>
+            </div>
+
+            <!-- Zone Settings -->
+            <div class="panel-section">
+                <h3 class="section-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
+                        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+                    </svg>
+                    Zone Configuration
+                </h3>
+                <div class="zone-config">
+                    <div class="zone-input-group">
+                        <label>Zone Name</label>
+                        <input type="text" id="zoneName" value="Farm Boundary" class="zone-input">
+                    </div>
+                    <div class="zone-input-row">
+                        <div class="zone-input-group">
+                            <label>X1 (%)</label>
+                            <input type="number" id="zoneX1" value="5" min="0" max="100" class="zone-input">
+                        </div>
+                        <div class="zone-input-group">
+                            <label>Y1 (%)</label>
+                            <input type="number" id="zoneY1" value="5" min="0" max="100" class="zone-input">
+                        </div>
+                        <div class="zone-input-group">
+                            <label>X2 (%)</label>
+                            <input type="number" id="zoneX2" value="95" min="0" max="100" class="zone-input">
+                        </div>
+                        <div class="zone-input-group">
+                            <label>Y2 (%)</label>
+                            <input type="number" id="zoneY2" value="95" min="0" max="100" class="zone-input">
+                        </div>
+                    </div>
+                    <button class="btn btn-outline btn-full" onclick="updateZone()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+                            <polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/>
+                        </svg>
+                        Update Zone
+                    </button>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="panel-section">
+                <button class="btn btn-ghost btn-full" onclick="resetStats()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                        <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+                    </svg>
+                    Reset All Statistics
+                </button>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Alert Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Alert Sound (generated via Web Audio API) -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
