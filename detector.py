@@ -80,18 +80,33 @@ class WildlifeDetector:
         """
         raw_candidates = []
 
-        # 1. Base YOLO Inference
+        # 1. Base YOLO Inference (including Person=0 and Dog=16 for disambiguation)
         base_results = self.model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+        detected_persons = []
+        detected_dogs = []
+        detected_sheeps = []
+
         for result in base_results:
             boxes = result.boxes
             if boxes is None:
                 continue
             for box in boxes:
                 cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                # Check for humans (COCO class 0: person) to prevent false monkey detections
+                if cls_id == 0:
+                    detected_persons.append([x1, y1, x2, y2])
+                    continue
+
                 if cls_id in WILDLIFE_CLASSES:
                     animal_name = WILDLIFE_CLASSES[cls_id]
-                    conf = float(box.conf[0])
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    if animal_name == 'Dog':
+                        detected_dogs.append([x1, y1, x2, y2])
+                    elif animal_name == 'Sheep':
+                        detected_sheeps.append([x1, y1, x2, y2])
+
                     raw_candidates.append({
                         'animal': animal_name,
                         'confidence': conf,
@@ -99,9 +114,23 @@ class WildlifeDetector:
                         'is_custom': False
                     })
 
-        # 2. Custom Monkey Inference
+        # Helper IoU function
+        def compute_iou(boxA, boxB):
+            ax1, ay1, ax2, ay2 = boxA
+            bx1, by1, bx2, by2 = boxB
+            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+            if ix2 <= ix1 or iy2 <= iy1:
+                return 0.0
+            inter_area = (ix2 - ix1) * (iy2 - iy1)
+            areaA = (ax2 - ax1) * (ay2 - ay1)
+            areaB = (bx2 - bx1) * (by2 - by1)
+            min_area = min(areaA, areaB)
+            return inter_area / min_area if min_area > 0 else 0.0
+
+        # 2. Custom Monkey Inference (Strict Confidence: >= 0.55)
         if self.monkey_model is not None:
-            monkey_results = self.monkey_model(frame, conf=0.35, verbose=False)
+            monkey_results = self.monkey_model(frame, conf=0.55, verbose=False)
             for result in monkey_results:
                 boxes = result.boxes
                 if boxes is None:
@@ -109,34 +138,40 @@ class WildlifeDetector:
                 for box in boxes:
                     conf = float(box.conf[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    m_box = [x1, y1, x2, y2]
+
+                    # Filter A: If box overlaps heavily with a recognized HUMAN, it is NOT a monkey!
+                    is_human = any(compute_iou(m_box, p_box) > 0.35 for p_box in detected_persons)
+                    if is_human:
+                        continue
+
+                    # Filter B: If box overlaps with a recognized DOG, preserve DOG (don't mislabel as monkey)
+                    is_dog = any(compute_iou(m_box, d_box) > 0.40 for d_box in detected_dogs)
+                    if is_dog:
+                        continue
+
+                    # Filter C: If box overlaps heavily with a recognized SHEEP, preserve SHEEP
+                    is_sheep = any(compute_iou(m_box, s_box) > 0.50 for s_box in detected_sheeps)
+                    if is_sheep:
+                        continue
+
                     raw_candidates.append({
                         'animal': 'Monkey',
                         'confidence': conf,
-                        'bbox': [x1, y1, x2, y2],
+                        'bbox': m_box,
                         'is_custom': True
                     })
 
-        # 3. Non-Maximum Suppression / De-duplication (Monkey overrides false Bear/Cat on same box)
+        # 3. Non-Maximum Suppression (Monkey overrides false Bear/Cat on same animal)
         filtered_candidates = []
         for cand in raw_candidates:
             if cand['animal'] in ('Bear', 'Cat', 'Bird'):
-                # Check if overlapping with a detected Monkey
                 overlap = False
                 for m_cand in raw_candidates:
                     if m_cand['animal'] == 'Monkey':
-                        # Compute simple IoU
-                        bx1, by1, bx2, by2 = cand['bbox']
-                        mx1, my1, mx2, my2 = m_cand['bbox']
-                        ix1 = max(bx1, mx1)
-                        iy1 = max(by1, my1)
-                        ix2 = min(bx2, mx2)
-                        iy2 = min(by2, my2)
-                        if ix2 > ix1 and iy2 > iy1:
-                            inter_area = (ix2 - ix1) * (iy2 - iy1)
-                            b_area = (bx2 - bx1) * (by2 - by1)
-                            if b_area > 0 and (inter_area / b_area) > 0.4:
-                                overlap = True
-                                break
+                        if compute_iou(cand['bbox'], m_cand['bbox']) > 0.40:
+                            overlap = True
+                            break
                 if not overlap:
                     filtered_candidates.append(cand)
             else:
