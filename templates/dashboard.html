@@ -100,19 +100,20 @@
 
         <!-- Right Panel: Dashboard -->
         <aside class="panel dashboard-panel">
-            <!-- Stats Grid -->
-            <div class="stats-grid">
-                <div class="stat-card" id="statTotal">
-                    <div class="stat-icon stat-icon-blue">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                        </svg>
-                    </div>
-                    <div class="stat-info">
-                        <span class="stat-value" id="totalDetections">0</span>
-                        <span class="stat-label">Total Detections</span>
-                    </div>
+            <!-- Real-Time Farm Presence (What the Farmer Needs Right Now) -->
+            <div class="farm-live-presence">
+                <div class="live-presence-header">
+                    <span class="live-beacon"></span>
+                    <span class="live-title">Animals in Farm Right Now</span>
+                    <span class="live-badge" id="liveTotalAnimals">0 Active</span>
                 </div>
+                <div class="live-animal-chips" id="liveAnimalChips">
+                    <div class="empty-live-state">🌾 No animals currently in boundary</div>
+                </div>
+            </div>
+
+            <!-- Core Alert & Threat Metrics -->
+            <div class="stats-grid">
                 <div class="stat-card" id="statAlerts">
                     <div class="stat-icon stat-icon-red">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -135,18 +136,6 @@
                     <div class="stat-info">
                         <span class="stat-value" id="criticalCount">0</span>
                         <span class="stat-label">Critical Threats</span>
-                    </div>
-                </div>
-                <div class="stat-card" id="statSpecies">
-                    <div class="stat-icon stat-icon-green">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-                            <polyline points="22,6 12,13 2,6"/>
-                        </svg>
-                    </div>
-                    <div class="stat-info">
-                        <span class="stat-value" id="speciesCount">0</span>
-                        <span class="stat-label">Species Detected</span>
                     </div>
                 </div>
             </div>
@@ -258,6 +247,21 @@
                         </svg>
                         Update Zone
                     </button>
+                </div>
+            </div>
+
+            <!-- Historical Telemetry & Model Stats (Moved below for reference) -->
+            <div class="panel-section telemetry-section">
+                <div class="telemetry-bar">
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Lifetime Detections</span>
+                        <span class="telemetry-val" id="totalDetections">0</span>
+                    </div>
+                    <div class="telemetry-divider"></div>
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Species Tracked</span>
+                        <span class="telemetry-val" id="speciesCount">0</span>
+                    </div>
                 </div>
             </div>
 

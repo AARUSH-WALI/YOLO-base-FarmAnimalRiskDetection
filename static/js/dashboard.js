@@ -120,8 +120,13 @@ socket.on('video_frame', (data) => {
     // Update live detection count
     const count = data.detections ? data.detections.length : 0;
     const counter = document.getElementById('liveDetectionCount');
-    counter.textContent = `${count} detection${count !== 1 ? 's' : ''}`;
-    counter.className = 'detection-counter' + (count > 0 ? ' has-detections' : '');
+    if (counter) {
+        counter.textContent = `${count} in boundary`;
+        counter.className = 'detection-counter' + (count > 0 ? ' has-detections' : '');
+    }
+
+    // Update real-time farm presence (e.g. "2 Monkeys, 1 Cow right now")
+    updateLiveAnimalsInFarm(data.detections || []);
 });
 
 socket.on('wildlife_alert', (alert) => {
@@ -204,6 +209,50 @@ function updateStats(stats) {
 
     // Update species list
     updateSpeciesList(stats.animals_detected || {});
+}
+
+// ============== Real-Time Animals in Farm Right Now ==============
+function updateLiveAnimalsInFarm(detections) {
+    const container = document.getElementById('liveAnimalChips');
+    const badge = document.getElementById('liveTotalAnimals');
+    if (!container || !badge) return;
+
+    // Filter animals that are inside the farm zone
+    const insideZone = detections.filter(d => d.in_zone !== false);
+    const totalCount = insideZone.length;
+
+    badge.textContent = `${totalCount} Active`;
+    if (totalCount > 0) {
+        badge.className = 'live-badge live-badge-active';
+    } else {
+        badge.className = 'live-badge';
+    }
+
+    if (totalCount === 0) {
+        container.innerHTML = '<div class="empty-live-state">🌾 No animals currently in boundary</div>';
+        return;
+    }
+
+    // Count per animal type (e.g. 2 Monkeys, 1 Cow, 14 Sheep)
+    const counts = {};
+    const threats = {};
+    insideZone.forEach(d => {
+        counts[d.animal] = (counts[d.animal] || 0) + 1;
+        threats[d.animal] = d.threat || 'medium';
+    });
+
+    // Render chips
+    container.innerHTML = Object.entries(counts).map(([animal, count]) => {
+        const threat = threats[animal] || 'medium';
+        const emoji = animalEmojis[animal] || '🐾';
+        return `
+            <div class="live-chip live-chip-${threat}">
+                <span class="live-chip-icon">${emoji}</span>
+                <span class="live-chip-name">${animal}</span>
+                <span class="live-chip-count">${count}</span>
+            </div>
+        `;
+    }).join('');
 }
 
 function animateValue(elementId, newValue) {
@@ -391,7 +440,8 @@ async function handleFileUpload(event) {
             counter.textContent = `${count} detection${count !== 1 ? 's' : ''}`;
             counter.className = 'detection-counter' + (count > 0 ? ' has-detections' : '');
 
-            // Show detection cards
+            // Show detection cards and live farm presence
+            updateLiveAnimalsInFarm(data.detections || []);
             if (data.detections && data.detections.length > 0) {
                 showDetectionResults(data.detections);
             }
