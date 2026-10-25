@@ -36,6 +36,8 @@ class WildlifeDetector:
 
         self.detection_log = []
         self.alert_history = {}  # Track last alert time per animal type
+        self.first_seen = {}     # Track when an animal class was first continuously seen {animal_name: timestamp}
+        self.last_seen = {}      # Track last frame timestamp animal was seen {animal_name: timestamp}
         self.total_detections = 0
         self.detection_zone = DEFAULT_ZONE.copy()
         self.stats = {
@@ -45,7 +47,7 @@ class WildlifeDetector:
             'threat_counts': {'low': 0, 'medium': 0, 'critical': 0},
             'session_start': datetime.now().isoformat(),
         }
-        print("[INFO] Dual-model detection pipeline ready!")
+        print("[INFO] Dual-model detection pipeline ready with temporal persistence tracking!")
 
     def set_detection_zone(self, zone):
         """Update the detection zone boundaries."""
@@ -64,13 +66,39 @@ class WildlifeDetector:
         cy = (y1 + y2) / 2
         return zone_x1 <= cx <= zone_x2 and zone_y1 <= cy <= zone_y2
 
-    def should_trigger_alert(self, animal_name):
-        """Check if alert should be triggered (respects cooldown)."""
+    def should_trigger_alert(self, animal_name, min_persistence_seconds=2.0):
+        """
+        Check if alert should be triggered.
+        Requires sustained continuous detection (min_persistence_seconds) to prevent transient 1-second noise alerts.
+        Also enforces cooldown to prevent notification storms.
+        """
         now = datetime.now()
+
+        # Update continuous sighting window
+        if animal_name not in self.first_seen:
+            self.first_seen[animal_name] = now
+            self.last_seen[animal_name] = now
+            return False
+        
+        # If last seen was more than 1.5s ago, reset sighting window
+        if (now - self.last_seen[animal_name]).total_seconds() > 1.5:
+            self.first_seen[animal_name] = now
+            self.last_seen[animal_name] = now
+            return False
+
+        self.last_seen[animal_name] = now
+        duration_visible = (now - self.first_seen[animal_name]).total_seconds()
+
+        # Must be visible continuously for at least min_persistence_seconds (e.g. 2.0s)
+        if duration_visible < min_persistence_seconds:
+            return False
+
+        # Enforce alert cooldown (e.g. 10s between repeated alerts for the same species)
         if animal_name in self.alert_history:
             last_alert = self.alert_history[animal_name]
             if (now - last_alert).total_seconds() < ALERT_COOLDOWN_SECONDS:
                 return False
+
         self.alert_history[animal_name] = now
         return True
 
@@ -151,18 +179,29 @@ class WildlifeDetector:
                                 'is_custom': True
                             })
 
-        # 3. Suppress false Bear/Cat when a verified Monkey is present
+        # 3. Suppress false Bear/Cat when monkeys are present
+        # If monkeys are detected in the frame, any overlapping box OR co-occurring 'Bear' (which is actually a monkey back) is suppressed
+        has_monkeys = any(cand['animal'] == 'Monkey' for cand in raw_candidates)
         filtered_candidates = []
+
         for cand in raw_candidates:
             if cand['animal'] in ('Bear', 'Cat', 'Bird'):
+                # Rule A: Direct bounding box overlap with a Monkey
                 overlap = False
                 for m_cand in raw_candidates:
                     if m_cand['animal'] == 'Monkey':
-                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.40:
+                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.30:
                             overlap = True
                             break
-                if not overlap:
-                    filtered_candidates.append(cand)
+                if overlap:
+                    continue
+
+                # Rule B: Troop context — If multiple monkeys are present in the frame,
+                # any solitary 'Bear' detected in the same scene without high confidence (> 0.88) is a false monkey back
+                if cand['animal'] == 'Bear' and has_monkeys and cand['confidence'] < 0.88:
+                    continue
+
+                filtered_candidates.append(cand)
             else:
                 filtered_candidates.append(cand)
 
