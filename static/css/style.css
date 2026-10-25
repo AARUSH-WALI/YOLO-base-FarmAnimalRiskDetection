@@ -462,8 +462,15 @@ body::before {
 .live-presence-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: var(--space-sm);
     margin-bottom: var(--space-sm);
+}
+
+.live-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
 }
 
 .live-beacon {
@@ -486,7 +493,12 @@ body::before {
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.01em;
-    flex: 1;
+}
+
+.live-badges-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .live-badge {
@@ -498,36 +510,72 @@ body::before {
     color: var(--text-muted);
     border: 1px solid var(--border-subtle);
     font-family: var(--font-mono);
+    transition: var(--transition-fast);
 }
 
 .live-badge.live-badge-active {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(16, 185, 129, 0.18);
     color: #34d399;
-    border-color: rgba(16, 185, 129, 0.35);
+    border-color: rgba(16, 185, 129, 0.45);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
 }
 
-.live-animal-chips {
+.live-badge-human {
+    background: rgba(56, 189, 248, 0.1);
+    color: var(--text-muted);
+    border-color: rgba(56, 189, 248, 0.25);
+}
+
+.live-badge-human.live-badge-human-active {
+    background: rgba(234, 179, 8, 0.22);
+    color: #fde047;
+    border-color: rgba(234, 179, 8, 0.55);
+    box-shadow: 0 0 10px rgba(234, 179, 8, 0.3);
+}
+
+.live-presence-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.live-presence-subgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.live-subgroup-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.live-animal-chips,
+.live-human-chips {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-xs);
-    min-height: 38px;
+    min-height: 32px;
     align-items: center;
 }
 
 .empty-live-state {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-muted);
     font-style: italic;
-    padding: 6px 0;
+    padding: 4px 0;
 }
 
 .live-chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    padding: 5px 10px;
     border-radius: var(--radius-md);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     font-weight: 600;
     animation: chipPop 0.25s ease-out;
     border: 1px solid;
@@ -557,13 +605,20 @@ body::before {
     animation: chipPop 0.25s ease-out, chipAlertPulse 1.5s infinite;
 }
 
+.live-chip-human {
+    background: rgba(56, 189, 248, 0.16);
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #7dd3fc;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.18);
+}
+
 @keyframes chipAlertPulse {
     0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
     50% { box-shadow: 0 0 12px rgba(239, 68, 68, 0.4); }
 }
 
 .live-chip-icon {
-    font-size: 1.15rem;
+    font-size: 1.1rem;
     line-height: 1;
 }
 
@@ -792,18 +847,142 @@ body::before {
     text-align: right;
 }
 
+/* Farm Intrusion Census Section */
+.farm-census-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.census-tabs {
+    display: flex;
+    background: var(--bg-input);
+    padding: 3px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-subtle);
+    gap: 3px;
+}
+
+.census-tab {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    font-family: var(--font-body);
+}
+
+.census-tab:hover {
+    color: var(--text-primary);
+}
+
+.census-tab.active {
+    background: var(--accent-primary);
+    color: white;
+    box-shadow: 0 0 10px var(--accent-primary-glow);
+}
+
+.census-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+}
+
+.census-stat-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    transition: var(--transition-default);
+}
+
+.census-stat-card:hover {
+    transform: translateY(-1px);
+}
+
+.human-census-card {
+    border-color: rgba(56, 189, 248, 0.3);
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.08), rgba(15, 23, 42, 0.5));
+}
+
+.human-census-card:hover {
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+}
+
+.animal-census-card {
+    border-color: rgba(16, 185, 129, 0.3);
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(15, 23, 42, 0.5));
+}
+
+.animal-census-card:hover {
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+}
+
+.census-stat-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+}
+
+.census-stat-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.census-stat-val {
+    font-size: 1.35rem;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    line-height: 1.1;
+}
+
+.census-stat-lbl {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-top: 2px;
+    letter-spacing: 0.02em;
+}
+
+.species-census-box {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.species-census-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    font-weight: 700;
+}
+
 /* Species List */
 .species-list {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+    max-height: 180px;
+    overflow-y: auto;
 }
 
 .species-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 7px 10px;
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -813,26 +992,53 @@ body::before {
 
 .species-item:hover {
     background: var(--bg-card-hover);
+    border-color: var(--border-hover);
 }
 
-.species-name {
+.species-name-wrap {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
     font-weight: 600;
 }
 
+.species-emoji {
+    font-size: 1.05rem;
+}
+
+.species-name {
+    color: var(--text-primary);
+}
+
+.species-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.species-pct-pill {
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-input);
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+}
+
 .species-count {
     font-family: var(--font-mono);
-    font-weight: 600;
+    font-weight: 700;
+    font-size: 0.92rem;
     color: var(--accent-primary);
+    min-width: 24px;
+    text-align: right;
 }
 
 .empty-state-small {
     text-align: center;
-    padding: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-style: italic;
 }
 

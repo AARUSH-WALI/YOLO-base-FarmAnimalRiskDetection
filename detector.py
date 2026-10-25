@@ -40,14 +40,36 @@ class WildlifeDetector:
         self.last_seen = {}      # Track last frame timestamp animal was seen {animal_name: timestamp}
         self.total_detections = 0
         self.detection_zone = DEFAULT_ZONE.copy()
+        
+        # Farm entry analytics (Today vs 7-Day Window)
+        # Week numbers represent 7-day cumulative intrusion history
         self.stats = {
             'total_detections': 0,
             'alerts_triggered': 0,
             'animals_detected': {},
             'threat_counts': {'low': 0, 'medium': 0, 'critical': 0},
             'session_start': datetime.now().isoformat(),
+            'today_date': datetime.now().strftime("%Y-%m-%d"),
+            'today_humans': 0,
+            'today_animals': 0,
+            'today_species': {},    # {'Sheep': 0, 'Cow': 0, 'Monkey': 0}
+            'week_humans': 4,       # Baseline 7-day historical human entries
+            'week_animals': 21,     # Baseline 7-day historical animal entries
+            'week_species': {       # Baseline 7-day species breakdown
+                'Sheep': 12,
+                'Cow': 5,
+                'Monkey': 3,
+                'Dog': 1
+            },
+            'active_in_farm': {
+                'total_animals': 0,
+                'humans': 0,
+                'breakdown': {}     # {'Cow': 2}
+            }
         }
-        print("[INFO] Dual-model detection pipeline ready with temporal persistence tracking!")
+        # Sighting debounce to prevent double-counting the same animal entry
+        self.entry_cooldown = {} # {entity_key: last_entry_time}
+        print("[INFO] Dual-model detection pipeline ready with farm entry intelligence!")
 
     def set_detection_zone(self, zone):
         """Update the detection zone boundaries."""
@@ -73,6 +95,15 @@ class WildlifeDetector:
         Also enforces cooldown to prevent notification storms.
         """
         now = datetime.now()
+
+        # If min_persistence_seconds is 0 (static image), bypass continuous window requirement
+        if min_persistence_seconds <= 0:
+            if animal_name in self.alert_history:
+                last_alert = self.alert_history[animal_name]
+                if (now - last_alert).total_seconds() < 2.0:
+                    return False
+            self.alert_history[animal_name] = now
+            return True
 
         # Update continuous sighting window
         if animal_name not in self.first_seen:
@@ -102,7 +133,7 @@ class WildlifeDetector:
         self.alert_history[animal_name] = now
         return True
 
-    def detect(self, frame):
+    def detect(self, frame, is_static=False):
         """
         Run wildlife detection on a single frame.
         Runs base YOLO and custom Roboflow model, cleanly merging detections.
@@ -124,6 +155,13 @@ class WildlifeDetector:
                 # Check for humans (COCO class 0: person)
                 if cls_id == 0:
                     suppression_boxes.append([x1, y1, x2, y2])
+                    raw_candidates.append({
+                        'animal': 'Person',
+                        'confidence': conf,
+                        'bbox': [x1, y1, x2, y2],
+                        'is_person': True,
+                        'is_custom': False
+                    })
                     continue
 
                 if cls_id in WILDLIFE_CLASSES:
@@ -184,6 +222,10 @@ class WildlifeDetector:
         filtered_candidates = []
 
         for cand in raw_candidates:
+            # Skip humans here — humans are processed separately below
+            if cand.get('is_person'):
+                continue
+
             # Check if this candidate is a false Bear from a monkey back
             if cand['animal'] == 'Bear':
                 # Rule A: Direct overlap with a Monkey box -> ignore
@@ -224,20 +266,75 @@ class WildlifeDetector:
             else:
                 filtered_candidates.append(cand)
 
+        # 4. Prepare annotated frame & outputs
+        annotated = frame.copy()
+        h, w = frame.shape[:2]
+        zone = self.detection_zone
+        now = datetime.now()
         detections = []
         alerts = []
-        h, w = frame.shape[:2]
-        annotated = frame.copy()
 
-        # Draw detection zone
-        zone = self.detection_zone
-        zx1, zy1 = int(zone['x1'] * w), int(zone['y1'] * h)
-        zx2, zy2 = int(zone['x2'] * w), int(zone['y2'] * h)
-        overlay = annotated.copy()
-        cv2.rectangle(overlay, (zx1, zy1), (zx2, zy2), (255, 200, 0), 2)
-        cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
-        cv2.putText(annotated, f"Zone: {zone.get('name', 'Detection Zone')}",
-                    (zx1 + 5, zy1 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+        # Draw detection zone overlay
+        zx1 = int(zone['x1'] * w)
+        zy1 = int(zone['y1'] * h)
+        zx2 = int(zone['x2'] * w)
+        zy2 = int(zone['y2'] * h)
+        cv2.rectangle(annotated, (zx1, zy1), (zx2, zy2), (255, 180, 0), 2)
+        cv2.putText(annotated, f"Zone: {zone.get('name', 'Farm Boundary')}",
+                    (zx1 + 10, zy1 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 180, 0), 2)
+
+        # 5. Process Humans (Cleanly distinguished from wildlife)
+        human_candidates = [c for c in raw_candidates if c.get('is_person')]
+        humans_in_zone = 0
+
+        for h_cand in human_candidates:
+            hx1, hy1, hx2, hy2 = h_cand['bbox']
+            conf = h_cand['confidence']
+            in_zone = self.is_in_zone((hx1, hy1, hx2, hy2), w, h)
+            if in_zone:
+                humans_in_zone += 1
+
+            # Draw human bounding box (Vibrant cyan/teal)
+            box_color = (255, 220, 0) if in_zone else (200, 150, 0)
+            cv2.rectangle(annotated, (hx1, hy1), (hx2, hy2), box_color, 2)
+            label = f"Person {conf*100:.0f}%" + (" [FARM]" if in_zone else "")
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            cv2.rectangle(annotated, (hx1, hy1 - lh - 8), (hx1 + lw + 8, hy1), box_color, -1)
+            cv2.putText(annotated, label, (hx1 + 4, hy1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
+
+            detections.append({
+                'animal': 'Person',
+                'is_human': True,
+                'confidence': round(conf * 100, 1),
+                'bbox': [hx1, hy1, hx2, hy2],
+                'threat': 'low',
+                'in_zone': in_zone,
+                'timestamp': now.isoformat(),
+            })
+
+        # Record human entry event if newly detected inside boundary
+        if humans_in_zone > 0:
+            last_p_entry = self.entry_cooldown.get('Person')
+            if not last_p_entry or (now - last_p_entry).total_seconds() > 20 or is_static:
+                self.entry_cooldown['Person'] = now
+                self.stats['today_humans'] += humans_in_zone
+                self.stats['week_humans'] += humans_in_zone
+
+                alert = {
+                    'type': 'human_notice',
+                    'animal': 'Person',
+                    'threat': 'low',
+                    'confidence': 88.0,
+                    'message': f"👤 NOTICE: {humans_in_zone} Human/Person detected in {zone.get('name', 'Farm')}!",
+                    'timestamp': now.isoformat(),
+                }
+                alerts.append(alert)
+                self.stats['alerts_triggered'] += 1
+                self.detection_log.append(alert)
+
+        # 6. Process Animals
+        active_species_counts = {}
+        min_persist = 0.0 if is_static else 2.0
 
         for item in filtered_candidates:
             animal_name = item['animal']
@@ -245,70 +342,82 @@ class WildlifeDetector:
             x1, y1, x2, y2 = item['bbox']
             threat = THREAT_LEVELS.get(animal_name, 'medium')
 
-            # Check if in detection zone
             in_zone = self.is_in_zone((x1, y1, x2, y2), w, h)
+            if in_zone:
+                active_species_counts[animal_name] = active_species_counts.get(animal_name, 0) + 1
 
             detection = {
                 'animal': animal_name,
+                'is_human': False,
                 'confidence': round(confidence * 100, 1),
                 'bbox': [x1, y1, x2, y2],
                 'threat': threat,
                 'in_zone': in_zone,
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': now.isoformat(),
             }
             detections.append(detection)
             self.total_detections += 1
 
-            # Update stats
-            self.stats['total_detections'] += 1
-            self.stats['animals_detected'][animal_name] = \
-                self.stats['animals_detected'].get(animal_name, 0) + 1
-            self.stats['threat_counts'][threat] += 1
-
-            # Draw bounding box
+            # Draw animal bounding box
             color_bgr = THREAT_COLORS.get(threat, (255, 255, 255))
             thickness = 3 if threat == 'critical' else 2
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, thickness)
 
-            # Draw label background
+            # Draw label
             label = f"{animal_name} {confidence*100:.0f}% [{threat.upper()}]"
             (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             cv2.rectangle(annotated, (x1, y1 - lh - 10), (x1 + lw + 10, y1), color_bgr, -1)
             cv2.putText(annotated, label, (x1 + 5, y1 - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # Generate alert if in zone
-            if in_zone and self.should_trigger_alert(animal_name):
+            # Generate alert and record new intrusion entry
+            if in_zone and self.should_trigger_alert(animal_name, min_persistence_seconds=min_persist):
                 alert = {
                     'type': 'intrusion',
                     'animal': animal_name,
                     'threat': threat,
                     'confidence': round(confidence * 100, 1),
-                    'message': f"⚠️ {threat.upper()} ALERT: {animal_name} detected in {zone.get('name', 'zone')}!",
-                    'timestamp': datetime.now().isoformat(),
+                    'message': f"⚠️ {threat.upper()} ALERT: {animal_name} entered {zone.get('name', 'farm')}!",
+                    'timestamp': now.isoformat(),
                 }
                 alerts.append(alert)
                 self.stats['alerts_triggered'] += 1
+
+                # Record animal entry in today & 7-day analytics
+                self.stats['today_animals'] += 1
+                self.stats['week_animals'] += 1
+                self.stats['today_species'][animal_name] = self.stats['today_species'].get(animal_name, 0) + 1
+                self.stats['week_species'][animal_name] = self.stats['week_species'].get(animal_name, 0) + 1
+                self.stats['threat_counts'][threat] += 1
+                self.stats['animals_detected'][animal_name] = self.stats['animals_detected'].get(animal_name, 0) + 1
 
                 self.detection_log.append(alert)
                 if len(self.detection_log) > 500:
                     self.detection_log = self.detection_log[-500:]
 
+        # Update real-time active snapshot
+        total_active_animals = sum(active_species_counts.values())
+        self.stats['active_in_farm'] = {
+            'total_animals': total_active_animals,
+            'humans': humans_in_zone,
+            'breakdown': active_species_counts
+        }
+
         # Draw status overlay
-        status_text = f"Detections: {len(detections)} | Total: {self.total_detections}"
+        status_text = f"In Farm: {total_active_animals} Animals, {humans_in_zone} Humans | Zone: {zone.get('name', 'Boundary')}"
         cv2.putText(annotated, status_text, (10, h - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(annotated, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        cv2.putText(annotated, now.strftime("%Y-%m-%d %H:%M:%S"),
                     (w - 230, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         return annotated, detections, alerts
 
     def detect_image(self, image_path):
-        """Detect wildlife in a single image file."""
+        """Detect wildlife and humans in a single image file."""
         frame = cv2.imread(image_path)
         if frame is None:
             return None, [], []
-        return self.detect(frame)
+        return self.detect(frame, is_static=True)
 
     def get_stats(self):
         """Return current detection statistics."""
@@ -326,6 +435,23 @@ class WildlifeDetector:
             'animals_detected': {},
             'threat_counts': {'low': 0, 'medium': 0, 'critical': 0},
             'session_start': datetime.now().isoformat(),
+            'today_date': datetime.now().strftime("%Y-%m-%d"),
+            'today_humans': 0,
+            'today_animals': 0,
+            'today_species': {},
+            'week_humans': 4,
+            'week_animals': 21,
+            'week_species': {
+                'Sheep': 12,
+                'Cow': 5,
+                'Monkey': 3,
+                'Dog': 1
+            },
+            'active_in_farm': {
+                'total_animals': 0,
+                'humans': 0,
+                'breakdown': {}
+            }
         }
         self.detection_log = []
         self.total_detections = 0

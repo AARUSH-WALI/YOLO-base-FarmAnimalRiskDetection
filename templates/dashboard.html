@@ -100,15 +100,31 @@
 
         <!-- Right Panel: Dashboard -->
         <aside class="panel dashboard-panel">
-            <!-- Real-Time Farm Presence (What the Farmer Needs Right Now) -->
+            <!-- Real-Time Farm Presence (Active Animals & Humans Right Now) -->
             <div class="farm-live-presence">
                 <div class="live-presence-header">
-                    <span class="live-beacon"></span>
-                    <span class="live-title">Animals in Farm Right Now</span>
-                    <span class="live-badge" id="liveTotalAnimals">0 Active</span>
+                    <div class="live-title-wrap">
+                        <span class="live-beacon"></span>
+                        <span class="live-title">In Farm Right Now</span>
+                    </div>
+                    <div class="live-badges-wrap">
+                        <span class="live-badge" id="liveTotalAnimals">0 Animals</span>
+                        <span class="live-badge live-badge-human" id="liveTotalHumans">0 Humans</span>
+                    </div>
                 </div>
-                <div class="live-animal-chips" id="liveAnimalChips">
-                    <div class="empty-live-state">🌾 No animals currently in boundary</div>
+                <div class="live-presence-body">
+                    <div class="live-presence-subgroup">
+                        <span class="live-subgroup-label">Animals:</span>
+                        <div class="live-animal-chips" id="liveAnimalChips">
+                            <div class="empty-live-state">🌾 No animals in boundary</div>
+                        </div>
+                    </div>
+                    <div class="live-presence-subgroup">
+                        <span class="live-subgroup-label">Humans:</span>
+                        <div class="live-human-chips" id="liveHumanChips">
+                            <div class="empty-live-state">👤 No humans in boundary</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -179,17 +195,47 @@
                 </div>
             </div>
 
-            <!-- Species Breakdown -->
-            <div class="panel-section">
-                <h3 class="section-title">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
-                        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-                        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-                    </svg>
-                    Species Breakdown
-                </h3>
-                <div class="species-list" id="speciesList">
-                    <div class="empty-state-small">No species detected yet</div>
+            <!-- Farm Activity & Intrusion Census (What Matters to the Farmer) -->
+            <div class="panel-section farm-census-section">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="section-icon">
+                            <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                            <circle cx="8.5" cy="7.5" r="4"/>
+                            <path d="M20 8v6M23 11h-6"/>
+                        </svg>
+                        Farm Intrusion Census
+                    </h3>
+                    <div class="census-tabs">
+                        <button class="census-tab active" id="tabToday" onclick="switchCensusTab('today')">Today</button>
+                        <button class="census-tab" id="tabWeek" onclick="switchCensusTab('week')">7 Days</button>
+                    </div>
+                </div>
+
+                <!-- Human vs Wildlife Summary -->
+                <div class="census-summary-grid">
+                    <div class="census-stat-card human-census-card">
+                        <span class="census-stat-icon">👤</span>
+                        <div class="census-stat-info">
+                            <span class="census-stat-val" id="censusHumans">0</span>
+                            <span class="census-stat-lbl" id="censusHumansLabel">Humans Entered (Today)</span>
+                        </div>
+                    </div>
+                    <div class="census-stat-card animal-census-card">
+                        <span class="census-stat-icon">🐾</span>
+                        <div class="census-stat-info">
+                            <span class="census-stat-val" id="censusAnimals">0</span>
+                            <span class="census-stat-lbl" id="censusAnimalsLabel">Animals Entered (Today)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Species Entry Breakdown -->
+                <div class="species-census-box">
+                    <div class="species-census-title" id="speciesCensusTitle">Species Entries Today:</div>
+                    <div class="species-list" id="speciesList">
+                        <div class="empty-state-small">No animal entries recorded yet</div>
+                    </div>
                 </div>
             </div>
 

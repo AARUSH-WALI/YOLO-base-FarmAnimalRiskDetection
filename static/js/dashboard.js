@@ -125,8 +125,8 @@ socket.on('video_frame', (data) => {
         counter.className = 'detection-counter' + (count > 0 ? ' has-detections' : '');
     }
 
-    // Update real-time farm presence (e.g. "2 Monkeys, 1 Cow right now")
-    updateLiveAnimalsInFarm(data.detections || []);
+    // Update real-time farm presence (Animals and Humans currently in farm)
+    updateLiveFarmPresence(data.detections || []);
 });
 
 socket.on('wildlife_alert', (alert) => {
@@ -173,6 +173,37 @@ socket.on('camera_error', (data) => {
     });
 });
 
+// ============== UI State & Census Control ==============
+let currentCensusTab = 'today';
+let cachedStats = null;
+
+function switchCensusTab(period) {
+    currentCensusTab = period;
+    const tabToday = document.getElementById('tabToday');
+    const tabWeek = document.getElementById('tabWeek');
+    const humanLbl = document.getElementById('censusHumansLabel');
+    const animalLbl = document.getElementById('censusAnimalsLabel');
+    const speciesTitle = document.getElementById('speciesCensusTitle');
+
+    if (period === 'today') {
+        if (tabToday) tabToday.classList.add('active');
+        if (tabWeek) tabWeek.classList.remove('active');
+        if (humanLbl) humanLbl.textContent = 'Humans Entered (Today)';
+        if (animalLbl) animalLbl.textContent = 'Animals Entered (Today)';
+        if (speciesTitle) speciesTitle.textContent = 'Species Entries Today:';
+    } else {
+        if (tabToday) tabToday.classList.remove('active');
+        if (tabWeek) tabWeek.classList.add('active');
+        if (humanLbl) humanLbl.textContent = 'Humans Entered (7 Days)';
+        if (animalLbl) animalLbl.textContent = 'Animals Entered (7 Days)';
+        if (speciesTitle) speciesTitle.textContent = 'Species Entries (Past 7 Days):';
+    }
+
+    if (cachedStats) {
+        renderCensus(cachedStats);
+    }
+}
+
 // ============== UI Update Functions ==============
 function updateConnectionStatus(connected) {
     const el = document.getElementById('connectionStatus');
@@ -191,10 +222,11 @@ function updateCameraStatus(active) {
 }
 
 function updateStats(stats) {
+    cachedStats = stats;
     animateValue('totalDetections', stats.total_detections || 0);
     animateValue('totalAlerts', stats.alerts_triggered || 0);
     animateValue('criticalCount', stats.threat_counts?.critical || 0);
-    animateValue('speciesCount', Object.keys(stats.animals_detected || {}).length);
+    animateValue('speciesCount', Object.keys(stats.animals_detected || stats.today_species || {}).length);
 
     // Update threat bars
     const total = (stats.threat_counts?.low || 0) +
@@ -207,49 +239,114 @@ function updateStats(stats) {
         setThreatBar('threatCritical', 'threatCriticalCount', stats.threat_counts?.critical || 0, total);
     }
 
-    // Update species list
-    updateSpeciesList(stats.animals_detected || {});
+    // Render Farm Intrusion Census (Today vs 7 Days)
+    renderCensus(stats);
 }
 
-// ============== Real-Time Animals in Farm Right Now ==============
-function updateLiveAnimalsInFarm(detections) {
-    const container = document.getElementById('liveAnimalChips');
-    const badge = document.getElementById('liveTotalAnimals');
-    if (!container || !badge) return;
+// ============== Real-Time Animals & Humans in Farm Right Now ==============
+function updateLiveFarmPresence(detections) {
+    const animalContainer = document.getElementById('liveAnimalChips');
+    const humanContainer = document.getElementById('liveHumanChips');
+    const animalBadge = document.getElementById('liveTotalAnimals');
+    const humanBadge = document.getElementById('liveTotalHumans');
 
-    // Filter animals that are inside the farm zone
-    const insideZone = detections.filter(d => d.in_zone !== false);
-    const totalCount = insideZone.length;
+    // Filter only detections within farm zone
+    const insideZone = (detections || []).filter(d => d.in_zone !== false);
 
-    badge.textContent = `${totalCount} Active`;
-    if (totalCount > 0) {
-        badge.className = 'live-badge live-badge-active';
-    } else {
-        badge.className = 'live-badge';
+    // Distinguish humans and animals
+    const humans = insideZone.filter(d => d.is_human === true || d.animal === 'Person');
+    const animals = insideZone.filter(d => d.is_human !== true && d.animal !== 'Person');
+
+    // 1. Update Animals Badge & Chips
+    if (animalBadge) {
+        animalBadge.textContent = `${animals.length} Animal${animals.length === 1 ? '' : 's'}`;
+        animalBadge.className = 'live-badge' + (animals.length > 0 ? ' live-badge-active' : '');
     }
 
-    if (totalCount === 0) {
-        container.innerHTML = '<div class="empty-live-state">🌾 No animals currently in boundary</div>';
+    if (animalContainer) {
+        if (animals.length === 0) {
+            animalContainer.innerHTML = '<div class="empty-live-state">🌾 No animals in boundary</div>';
+        } else {
+            const counts = {};
+            const threats = {};
+            animals.forEach(d => {
+                counts[d.animal] = (counts[d.animal] || 0) + 1;
+                threats[d.animal] = d.threat || 'medium';
+            });
+            animalContainer.innerHTML = Object.entries(counts).map(([animal, count]) => {
+                const threat = threats[animal] || 'medium';
+                const emoji = animalEmojis[animal] || '🐾';
+                return `
+                    <div class="live-chip live-chip-${threat}">
+                        <span class="live-chip-icon">${emoji}</span>
+                        <span class="live-chip-name">${animal}</span>
+                        <span class="live-chip-count">${count}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+    }
+
+    // 2. Update Humans Badge & Chips
+    if (humanBadge) {
+        humanBadge.textContent = `${humans.length} Human${humans.length === 1 ? '' : 's'}`;
+        humanBadge.className = 'live-badge live-badge-human' + (humans.length > 0 ? ' live-badge-human-active' : '');
+    }
+
+    if (humanContainer) {
+        if (humans.length === 0) {
+            humanContainer.innerHTML = '<div class="empty-live-state">👤 No humans in boundary</div>';
+        } else {
+            humanContainer.innerHTML = `
+                <div class="live-chip live-chip-human">
+                    <span class="live-chip-icon">👤</span>
+                    <span class="live-chip-name">Human / Person</span>
+                    <span class="live-chip-count">${humans.length}</span>
+                </div>
+            `;
+        }
+    }
+}
+
+// ============== Farm Intrusion Census Rendering ==============
+function renderCensus(stats) {
+    const isToday = (currentCensusTab === 'today');
+    const humanCount = isToday ? (stats.today_humans || 0) : (stats.week_humans || 0);
+    const animalCount = isToday ? (stats.today_animals || 0) : (stats.week_animals || 0);
+    const speciesMap = isToday ? (stats.today_species || {}) : (stats.week_species || {});
+
+    animateValue('censusHumans', humanCount);
+    animateValue('censusAnimals', animalCount);
+
+    updateSpeciesCensus(speciesMap, animalCount);
+}
+
+function updateSpeciesCensus(speciesMap, totalAnimals) {
+    const container = document.getElementById('speciesList');
+    if (!container) return;
+
+    const entries = Object.entries(speciesMap).filter(([_, count]) => count > 0);
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="empty-state-small">No animal entries recorded yet</div>';
         return;
     }
 
-    // Count per animal type (e.g. 2 Monkeys, 1 Cow, 14 Sheep)
-    const counts = {};
-    const threats = {};
-    insideZone.forEach(d => {
-        counts[d.animal] = (counts[d.animal] || 0) + 1;
-        threats[d.animal] = d.threat || 'medium';
-    });
+    // Sort by count descending
+    entries.sort((a, b) => b[1] - a[1]);
 
-    // Render chips
-    container.innerHTML = Object.entries(counts).map(([animal, count]) => {
-        const threat = threats[animal] || 'medium';
-        const emoji = animalEmojis[animal] || '🐾';
+    container.innerHTML = entries.map(([name, count]) => {
+        const emoji = animalEmojis[name] || '🐾';
+        const pct = totalAnimals > 0 ? Math.round((count / totalAnimals) * 100) : 0;
         return `
-            <div class="live-chip live-chip-${threat}">
-                <span class="live-chip-icon">${emoji}</span>
-                <span class="live-chip-name">${animal}</span>
-                <span class="live-chip-count">${count}</span>
+            <div class="species-item">
+                <div class="species-name-wrap">
+                    <span class="species-emoji">${emoji}</span>
+                    <span class="species-name">${name}</span>
+                </div>
+                <div class="species-meta">
+                    <span class="species-pct-pill">${pct}%</span>
+                    <span class="species-count">${count}</span>
+                </div>
             </div>
         `;
     }).join('');
@@ -257,6 +354,7 @@ function updateLiveAnimalsInFarm(detections) {
 
 function animateValue(elementId, newValue) {
     const el = document.getElementById(elementId);
+    if (!el) return;
     const current = parseInt(el.textContent) || 0;
     if (current !== newValue) {
         el.textContent = newValue;
@@ -267,28 +365,10 @@ function animateValue(elementId, newValue) {
 
 function setThreatBar(barId, countId, value, total) {
     const pct = total > 0 ? (value / total * 100) : 0;
-    document.getElementById(barId).style.width = pct + '%';
-    document.getElementById(countId).textContent = value;
-}
-
-function updateSpeciesList(animals) {
-    const container = document.getElementById('speciesList');
-    if (Object.keys(animals).length === 0) {
-        container.innerHTML = '<div class="empty-state-small">No species detected yet</div>';
-        return;
-    }
-
-    // Sort by count descending
-    const sorted = Object.entries(animals).sort((a, b) => b[1] - a[1]);
-    container.innerHTML = sorted.map(([name, count]) => `
-        <div class="species-item">
-            <span class="species-name">
-                <span>${animalEmojis[name] || '🐾'}</span>
-                ${name}
-            </span>
-            <span class="species-count">${count}</span>
-        </div>
-    `).join('');
+    const bar = document.getElementById(barId);
+    const count = document.getElementById(countId);
+    if (bar) bar.style.width = pct + '%';
+    if (count) count.textContent = value;
 }
 
 // ============== Alert Log ==============

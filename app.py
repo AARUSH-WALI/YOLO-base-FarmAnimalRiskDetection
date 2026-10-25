@@ -73,6 +73,7 @@ def process_video_feed(source):
     camera_state['cap'] = cap
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_delay = 1.0 / min(fps, 15)  # Cap at 15 FPS for processing
+    frame_counter = 0
 
     while camera_state['active']:
         ret, frame = cap.read()
@@ -83,6 +84,8 @@ def process_video_feed(source):
                 continue
             else:
                 break
+
+        frame_counter += 1
 
         # Resize for faster processing
         h, w = frame.shape[:2]
@@ -107,6 +110,10 @@ def process_video_feed(source):
         for alert in alerts:
             save_detection_log(alert)
             socketio.emit('wildlife_alert', alert)
+
+        # Periodically emit stats (every 15 frames ~ 1 sec)
+        if frame_counter % 15 == 0:
+            socketio.emit('stats_update', detector.get_stats())
 
         time.sleep(frame_delay)
 
