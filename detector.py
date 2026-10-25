@@ -69,6 +69,8 @@ class WildlifeDetector:
         }
         # Sighting debounce to prevent double-counting the same animal entry
         self.entry_cooldown = {} # {entity_key: last_entry_time}
+        # Spatial-temporal memory to prevent angular misclassification flicker (e.g. hen turning to Dog/Monkey)
+        self.spatial_memory = [] # [{'centroid': (cx, cy), 'animal': 'Bird', 'last_seen': datetime, 'hits': int}]
         print("[INFO] Dual-model detection pipeline ready with farm entry intelligence!")
 
     def set_detection_zone(self, zone):
@@ -154,7 +156,11 @@ class WildlifeDetector:
 
                 # Check for humans (COCO class 0: person)
                 if cls_id == 0:
-                    suppression_boxes.append([x1, y1, x2, y2])
+                    suppression_boxes.append({
+                        'bbox': [x1, y1, x2, y2],
+                        'animal': 'Person',
+                        'conf': conf
+                    })
                     raw_candidates.append({
                         'animal': 'Person',
                         'confidence': conf,
@@ -166,14 +172,19 @@ class WildlifeDetector:
 
                 if cls_id in WILDLIFE_CLASSES:
                     animal_name = WILDLIFE_CLASSES[cls_id]
-                    # Confirmed livestock boxes shield from false monkey overlays
-                    if animal_name in ('Cow', 'Sheep', 'Dog', 'Horse', 'Elephant', 'Zebra', 'Giraffe'):
-                        suppression_boxes.append([x1, y1, x2, y2])
+                    # Confirmed livestock & poultry boxes shield from false monkey/dog overlays
+                    if animal_name in ('Cow', 'Sheep', 'Dog', 'Horse', 'Elephant', 'Zebra', 'Giraffe', 'Bird'):
+                        suppression_boxes.append({
+                            'bbox': [x1, y1, x2, y2],
+                            'animal': animal_name,
+                            'conf': conf
+                        })
 
                     raw_candidates.append({
                         'animal': animal_name,
                         'confidence': conf,
                         'bbox': [x1, y1, x2, y2],
+                        'is_person': False,
                         'is_custom': False
                     })
 
@@ -190,9 +201,41 @@ class WildlifeDetector:
             min_area = min(areaA, areaB)
             return inter_area / min_area if min_area > 0 else 0.0
 
-        # 2. Roboflow Trained Model Inference (Monkey detection with Person filter)
+        now = datetime.now()
+
+        # Update Spatial-Temporal Memory (Tracks stable Bird/Hen and Cow centroids to eliminate 3-4s angular flicker)
+        for cand in raw_candidates:
+            if cand['animal'] in ('Bird', 'Cow') and cand['confidence'] >= 0.40:
+                bx1, by1, bx2, by2 = cand['bbox']
+                bcx, bcy = (bx1 + bx2) / 2, (by1 + by2) / 2
+                matched = False
+                for track in self.spatial_memory:
+                    tcx, tcy = track['centroid']
+                    dist = ((bcx - tcx)**2 + (bcy - tcy)**2)**0.5
+                    if dist < 120 and track['animal'] == cand['animal']:
+                        track['centroid'] = (bcx, bcy)
+                        track['last_seen'] = now
+                        track['hits'] += 1
+                        matched = True
+                        break
+                if not matched:
+                    self.spatial_memory.append({
+                        'centroid': (bcx, bcy),
+                        'animal': cand['animal'],
+                        'last_seen': now,
+                        'hits': 1
+                    })
+
+        # Prune memory tracks older than 4.0s
+        self.spatial_memory = [
+            t for t in self.spatial_memory
+            if (now - t['last_seen']).total_seconds() < 4.0
+        ]
+
+        # 2. Roboflow Trained Model Inference (Monkey detection with Person/Bird/Livestock filter)
         if self.monkey_model is not None:
-            m_results = self.monkey_model(frame, conf=0.45, verbose=False)
+            # Raised threshold to 0.58 (eliminates 45% false positives on roosters, hens, and shaggy cattle)
+            m_results = self.monkey_model(frame, conf=0.58, verbose=False)
             for result in m_results:
                 boxes = result.boxes
                 if boxes is None:
@@ -201,34 +244,80 @@ class WildlifeDetector:
                     cls_id = int(box.cls[0])
                     cls_name = self.monkey_model.names.get(cls_id, '')
 
-                    # The Roboflow model specifically distinguishes 'monkey' from 'Person'
                     if cls_name.lower() == 'monkey':
                         conf = float(box.conf[0])
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                         m_box = [x1, y1, x2, y2]
+                        mcx, mcy = (x1 + x2) / 2, (y1 + y2) / 2
 
-                        # Ensure box doesn't overlap with confirmed human/livestock
-                        conflict = any(compute_overlap(m_box, s_box) > 0.35 for s_box in suppression_boxes)
+                        # Reject if overlapping with confirmed human, poultry, or livestock
+                        conflict = False
+                        for s in suppression_boxes:
+                            s_box = s['bbox']
+                            ov = compute_overlap(m_box, s_box)
+                            # Any poultry/bird or cow overlap > 0.18 strongly rejects false monkey
+                            if s['animal'] in ('Bird', 'Cow') and ov > 0.18:
+                                conflict = True
+                                break
+                            elif ov > 0.30:
+                                conflict = True
+                                break
+
+                        # Also check spatial track memory: if a Bird or Cow was recently confirmed here, reject monkey
+                        if not conflict:
+                            for track in self.spatial_memory:
+                                tcx, tcy = track['centroid']
+                                dist = ((mcx - tcx)**2 + (mcy - tcy)**2)**0.5
+                                if dist < 110 and track['animal'] in ('Bird', 'Cow') and conf < 0.78:
+                                    conflict = True
+                                    break
+
                         if not conflict:
                             raw_candidates.append({
                                 'animal': 'Monkey',
                                 'confidence': conf,
                                 'bbox': m_box,
+                                'is_person': False,
                                 'is_custom': True
                             })
 
-        # 3. Handle Monkey Backs & Suppress false Bear/Cat/Bird
+        # 3. Handle Monkey Backs & Suppress false Bear / Angular Hen Misclassifications
         has_monkeys = any(cand['animal'] == 'Monkey' for cand in raw_candidates)
         filtered_candidates = []
 
         for cand in raw_candidates:
-            # Skip humans here — humans are processed separately below
             if cand.get('is_person'):
                 continue
 
+            cx1, cy1, cx2, cy2 = cand['bbox']
+            ccx, ccy = (cx1 + cx2) / 2, (cy1 + cy2) / 2
+
+            # Hen / Poultry stabilization: If detected as Dog or Cat, but overlaps with a Bird or is near a tracked Bird:
+            if cand['animal'] in ('Dog', 'Cat'):
+                is_hen = False
+                # Check direct overlap with an active Bird detection
+                for b_cand in raw_candidates:
+                    if b_cand['animal'] == 'Bird' and compute_overlap(cand['bbox'], b_cand['bbox']) > 0.15:
+                        is_hen = True
+                        break
+                # Check spatial temporal memory of recently confirmed Bird
+                if not is_hen and cand['confidence'] < 0.70:
+                    for track in self.spatial_memory:
+                        tcx, tcy = track['centroid']
+                        dist = ((ccx - tcx)**2 + (ccy - tcy)**2)**0.5
+                        if dist < 110 and track['animal'] == 'Bird':
+                            is_hen = True
+                            track['last_seen'] = now
+                            break
+
+                if is_hen:
+                    cand['animal'] = 'Bird'
+                    cand['confidence'] = max(cand['confidence'], 0.72)
+                    filtered_candidates.append(cand)
+                    continue
+
             # Check if this candidate is a false Bear from a monkey back
             if cand['animal'] == 'Bear':
-                # Rule A: Direct overlap with a Monkey box -> ignore
                 overlap = False
                 for m_cand in raw_candidates:
                     if m_cand['animal'] == 'Monkey':
@@ -238,31 +327,29 @@ class WildlifeDetector:
                 if overlap:
                     continue
 
-                # Rule B: Troop context — If monkeys are visible in the scene,
-                # any "Bear" is a monkey sitting with its back turned.
-                # Relabel it as Monkey so the user sees "Monkey" instead of "Bear"!
                 if has_monkeys:
                     cand['animal'] = 'Monkey'
                     cand['confidence'] = round(cand['confidence'] * 0.90, 2)
                     filtered_candidates.append(cand)
                     continue
 
-                # Rule C: Real bears on farms are exceedingly rare. If solitary Bear has < 93% confidence, ignore as foliage/fur texture
                 if cand['confidence'] < 0.93:
                     continue
 
                 filtered_candidates.append(cand)
 
-            elif cand['animal'] in ('Cat', 'Bird'):
-                # Suppress small birds/cats if overlapping with a monkey
-                overlap = False
-                for m_cand in raw_candidates:
-                    if m_cand['animal'] == 'Monkey':
-                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.25:
-                            overlap = True
-                            break
-                if not overlap:
+            elif cand['animal'] == 'Monkey':
+                # Double-check: Monkeys should not appear inside an active poultry/cow location
+                suppress_monkey = False
+                for track in self.spatial_memory:
+                    tcx, tcy = track['centroid']
+                    dist = ((ccx - tcx)**2 + (ccy - tcy)**2)**0.5
+                    if dist < 110 and track['animal'] in ('Bird', 'Cow') and cand['confidence'] < 0.78:
+                        suppress_monkey = True
+                        break
+                if not suppress_monkey:
                     filtered_candidates.append(cand)
+
             else:
                 filtered_candidates.append(cand)
 
@@ -456,3 +543,4 @@ class WildlifeDetector:
         self.detection_log = []
         self.total_detections = 0
         self.alert_history = {}
+        self.spatial_memory = []
