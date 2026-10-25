@@ -179,29 +179,48 @@ class WildlifeDetector:
                                 'is_custom': True
                             })
 
-        # 3. Suppress false Bear/Cat when monkeys are present
-        # If monkeys are detected in the frame, any overlapping box OR co-occurring 'Bear' (which is actually a monkey back) is suppressed
+        # 3. Handle Monkey Backs & Suppress false Bear/Cat/Bird
         has_monkeys = any(cand['animal'] == 'Monkey' for cand in raw_candidates)
         filtered_candidates = []
 
         for cand in raw_candidates:
-            if cand['animal'] in ('Bear', 'Cat', 'Bird'):
-                # Rule A: Direct bounding box overlap with a Monkey
+            # Check if this candidate is a false Bear from a monkey back
+            if cand['animal'] == 'Bear':
+                # Rule A: Direct overlap with a Monkey box -> ignore
                 overlap = False
                 for m_cand in raw_candidates:
                     if m_cand['animal'] == 'Monkey':
-                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.30:
+                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.25:
                             overlap = True
                             break
                 if overlap:
                     continue
 
-                # Rule B: Troop context — If multiple monkeys are present in the frame,
-                # any solitary 'Bear' detected in the same scene without high confidence (> 0.88) is a false monkey back
-                if cand['animal'] == 'Bear' and has_monkeys and cand['confidence'] < 0.88:
+                # Rule B: Troop context — If monkeys are visible in the scene,
+                # any "Bear" is a monkey sitting with its back turned.
+                # Relabel it as Monkey so the user sees "Monkey" instead of "Bear"!
+                if has_monkeys:
+                    cand['animal'] = 'Monkey'
+                    cand['confidence'] = round(cand['confidence'] * 0.90, 2)
+                    filtered_candidates.append(cand)
+                    continue
+
+                # Rule C: Real bears on farms are exceedingly rare. If solitary Bear has < 93% confidence, ignore as foliage/fur texture
+                if cand['confidence'] < 0.93:
                     continue
 
                 filtered_candidates.append(cand)
+
+            elif cand['animal'] in ('Cat', 'Bird'):
+                # Suppress small birds/cats if overlapping with a monkey
+                overlap = False
+                for m_cand in raw_candidates:
+                    if m_cand['animal'] == 'Monkey':
+                        if compute_overlap(cand['bbox'], m_cand['bbox']) > 0.25:
+                            overlap = True
+                            break
+                if not overlap:
+                    filtered_candidates.append(cand)
             else:
                 filtered_candidates.append(cand)
 
