@@ -115,7 +115,6 @@ YOLO/
 ├── detector.py                       # Dual-model YOLOv8 ensemble, geofencing & census engine
 ├── config.py                         # Threat taxonomies, boundary defaults & cooldown settings
 ├── requirements.txt                  # Python dependencies (ultralytics, opencv, flask-socketio)
-├── SEMINAR_PROJECT_REPORT_AND_PPT.md # Full academic seminar report & 12-slide presentation guide
 ├── README.md                         # Project documentation
 ├── yolov8n.pt                        # Base MS-COCO YOLOv8 nano model
 ├── yolov8_monkey_roboflow.pt         # Fine-tuned 5,355-image Roboflow primate model
@@ -129,10 +128,6 @@ YOLO/
 ```
 
 ---
-
-## 🎓 Academic Defense & Seminar Resources
-For complete mathematical derivations (CIoU loss, centroid formulas), academic defense answers, and a 12-slide PowerPoint presentation guide, refer to:
-👉 **[SEMINAR_PROJECT_REPORT_AND_PPT.md](file:///e:/Sites/ProjectBuilderPro/YOLO/SEMINAR_PROJECT_REPORT_AND_PPT.md)**
 
 ---
 
